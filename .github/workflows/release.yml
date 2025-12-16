@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: linux-amd64,windows-amd64
+          - os: macos-latest
+            targets: darwin-amd64,darwin-arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Download Go Dependencies
+        run: |
+          go mod download
+          go mod tidy
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+
+      - name: Build Linux and Windows Binaries
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          mkdir -p bin
+          # -s strips symbol table, -w strips DWARF debug info
+          # This reduces binary size and avoids AV false positives
+          LDFLAGS="-s -w -X github.com/mikejsmith1985/forge-terminal/internal/updater.Version=${VERSION}"
+          
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o bin/forge-linux-amd64 ./cmd/forge
+          # Windows AMD64 (GUI mode - no console window)
+          GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS -H windowsgui" -o bin/forge-windows-amd64.exe ./cmd/forge
+
+      - name: Build macOS Binaries
+        if: matrix.os == 'macos-latest'
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          mkdir -p bin
+          # -s strips symbol table, -w strips DWARF debug info
+          LDFLAGS="-s -w -X github.com/mikejsmith1985/forge-terminal/internal/updater.Version=${VERSION}"
+          
+          # macOS AMD64
+          GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o bin/forge-darwin-amd64 ./cmd/forge
+          # macOS ARM64
+          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o bin/forge-darwin-arm64 ./cmd/forge
+
+      - name: Ad-hoc Sign macOS Binaries (Development)
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Ad-hoc sign binaries for development
+          # Production builds with Developer ID cert can be created by users via fork
+          /usr/bin/codesign --force --options runtime -s - bin/forge-darwin-amd64
+          /usr/bin/codesign --force --options runtime -s - bin/forge-darwin-arm64
+          
+          # Verify signatures
+          codesign -v bin/forge-darwin-amd64
+          codesign -v bin/forge-darwin-arm64
+          
+          echo ""
+          echo "ℹ️  Ad-hoc signed for development."
+          echo "For production builds with Developer ID: see docs/developer/MACOS_FORK_SETUP.md"
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            bin/forge-linux-amd64
+            bin/forge-windows-amd64.exe
+            bin/forge-darwin-amd64
+            bin/forge-darwin-arm64
+          generate_release_notes: true
