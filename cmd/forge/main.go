@@ -1980,10 +1980,10 @@ func handleDiagnosticsPlatform(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(platform)
 }
 
-// serveIndexWithVersion serves index.html with cache-busted asset URLs
+// serveIndexWithVersion serves index.html
+// Note: Vite generates content-hashed filenames (e.g., index-Nq_SWTTj.js) which
+// provide automatic cache busting. No need for query string version parameters.
 func serveIndexWithVersion(w http.ResponseWriter, r *http.Request, webFS fs.FS) {
-	version := updater.GetVersion()
-
 	// Read the index.html file
 	indexFile, err := webFS.Open("index.html")
 	if err != nil {
@@ -1998,17 +1998,11 @@ func serveIndexWithVersion(w http.ResponseWriter, r *http.Request, webFS fs.FS) 
 		return
 	}
 
-	// Replace asset URLs with versioned ones
-	html := string(content)
-	html = strings.ReplaceAll(html, `src="/assets/`, `src="/assets/`)
-	html = strings.ReplaceAll(html, `.js"`, `.js?v=`+version+`"`)
-	html = strings.ReplaceAll(html, `.css">`, `.css?v=`+version+`">`)
-
-	// Set headers
+	// Set headers - rely on Vite's content hashing for cache busting
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 
-	w.Write([]byte(html))
+	w.Write(content)
 }
