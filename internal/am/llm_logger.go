@@ -189,6 +189,33 @@ func (l *LLMLogger) IsTUICaptureMode() bool {
 	return l.tuiCaptureMode
 }
 
+// TriggerPeriodicSnapshot saves a snapshot based on time interval (backup mechanism).
+// This ensures TUI sessions are captured even if screen clear detection fails.
+// Safe to call frequently - only saves if buffer has meaningful content.
+func (l *LLMLogger) TriggerPeriodicSnapshot() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.activeConvID == "" || !l.tuiCaptureMode {
+		return
+	}
+
+	// Only save if buffer has meaningful content (>50 bytes to avoid noise)
+	if l.currentScreen.Len() < 50 {
+		return
+	}
+
+	// Rate limit: don't save more than once per 5 seconds
+	if time.Since(l.lastSnapshotTime) < 5*time.Second {
+		return
+	}
+
+	log.Printf("[LLM Logger] 📸 Periodic snapshot trigger (bufferSize=%d, timeSinceLast=%v)",
+		l.currentScreen.Len(), time.Since(l.lastSnapshotTime))
+
+	l.saveScreenSnapshotLocked()
+}
+
 // StartConversationFromProcess starts a conversation triggered by Layer 3 process detection.
 // This bridges Layer 3 (process monitoring) with Layer 1 (PTY logging).
 func (l *LLMLogger) StartConversationFromProcess(provider string, cmdType string, pid int) string {

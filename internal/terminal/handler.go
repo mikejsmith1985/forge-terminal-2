@@ -32,6 +32,14 @@ type Handler struct {
 	assistant     assistant.Service
 }
 
+// wsMessage represents a message to be written to the WebSocket.
+// All writes go through a single channel to eliminate race conditions.
+type wsMessage struct {
+	messageType int    // websocket.BinaryMessage or websocket.TextMessage
+	data        []byte // For binary messages
+	json        any    // For JSON messages (if data is nil, marshal this)
+}
+
 // ResizeMessage represents a terminal resize request from the client.
 type ResizeMessage struct {
 	Type string `json:"type"`
@@ -139,82 +147,238 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Set initial terminal size (default 80x24)
 	_ = session.Resize(80, 24)
 
+	// ═══════════════════════════════════════════════════════════════════════════
+	// CHANNEL-BASED ARCHITECTURE FOR FREEZE PREVENTION
+	// ═══════════════════════════════════════════════════════════════════════════
+	//
+	// Problem: gorilla/websocket is NOT thread-safe for concurrent writes.
+	// Previously, multiple goroutines wrote simultaneously:
+	// - PTY reader goroutine (main terminal output)
+	// - Vision parser goroutines (overlay messages)
+	// - AM callback goroutines (low-confidence notifications)
+	//
+	// Solution: All writes go through a single buffered channel.
+	// One dedicated writer goroutine processes the channel sequentially.
+	// This eliminates all race conditions and prevents freezes.
+	// ═══════════════════════════════════════════════════════════════════════════
+
+	// Buffered channel for WebSocket writes - large enough to avoid blocking
+	writeChan := make(chan wsMessage, 256)
+
+	// Channel for Vision data processing
+	visionChan := make(chan []byte, 64)
+
+	// Channel for AM data processing
+	amChan := make(chan string, 64)
+
+	// Shutdown coordination
+	done := make(chan struct{})
+	var closeOnce sync.Once
+	closeDone := func() { closeOnce.Do(func() { close(done) }) }
+
 	// Get Vision parser from assistant core
 	visionParser := h.assistantCore.GetVisionParser()
 
-	// PERFORMANCE FIX: Initialize AM/Vision/LLM systems asynchronously
-	// These don't need to block the terminal from becoming interactive
+	// Initialize AM/Vision/LLM systems
 	var llmLogger *am.LLMLogger
-	var insightsTracker *vision.InsightsTracker
+	var llmLoggerMu sync.RWMutex // Protects llmLogger access
 	amSystem := h.assistantCore.GetAMSystem()
 
-	// Launch async initialization - doesn't block terminal readiness
-	go func() {
-		if amSystem != nil {
-			llmLogger = amSystem.GetLLMLogger(tabID)
-			if llmLogger != nil {
-				activeConv := llmLogger.GetActiveConversationID()
-				log.Printf("[Terminal] Using LLM logger for tabID: %s, activeConv: %s", tabID, activeConv)
-			} else {
-				log.Printf("[Terminal] NO LLM logger available for tabID: %s", tabID)
-			}
-			// Record PTY heartbeat for Layer 1
-			if amSystem.HealthMonitor != nil {
-				amSystem.HealthMonitor.RecordPTYHeartbeat()
-			}
+	// Initialize AM system (now synchronous since we need llmLogger for callbacks)
+	if amSystem != nil {
+		llmLoggerMu.Lock()
+		llmLogger = amSystem.GetLLMLogger(tabID)
+		llmLoggerMu.Unlock()
 
-			// Initialize Vision Insights tracker
-			cwd, _ := os.Getwd()
-			sessionInfo := vision.SessionInfo{
-				TabID:      tabID,
-				WorkingDir: cwd,
-				ShellType:  shellConfig.ShellType,
-				InAutoMode: false, // Will be updated when auto-respond starts
-			}
-			insightsTracker = vision.NewInsightsTracker(amSystem.AMDir, sessionInfo)
-			visionParser.SetInsightsTracker(insightsTracker)
-			log.Printf("[Terminal] Vision insights tracker initialized for session %s", sessionID)
-
-			// Set up low-confidence callback for AM v2.0
-			// When parsing confidence is low during auto-respond, notify user via Vision
-			if llmLogger != nil {
-				llmLogger.SetLowConfidenceCallback(func(raw string) {
-					log.Printf("[AM] Low confidence parsing detected, sending Vision notification")
-					// Send a Vision overlay to notify the user
-					overlayMsg := VisionOverlayMessage{
-						Type:        "VISION_OVERLAY",
-						OverlayType: "AM_LOW_CONFIDENCE",
-						Payload: map[string]interface{}{
-							"message":     "AM detected low-confidence parsing. Raw data preserved for manual review.",
-							"severity":    "warning",
-							"autoRespond": true,
-							"rawLength":   len(raw),
-						},
-					}
-					if err := conn.WriteJSON(overlayMsg); err != nil {
-						log.Printf("[AM] Failed to send low-confidence notification: %v", err)
-					}
-				})
-			}
-			log.Printf("[Terminal] Session %s: AM system initialized with tabID %s", sessionID, tabID)
+		if llmLogger != nil {
+			activeConv := llmLogger.GetActiveConversationID()
+			log.Printf("[Terminal] Using LLM logger for tabID: %s, activeConv: %s", tabID, activeConv)
+		} else {
+			log.Printf("[Terminal] NO LLM logger available for tabID: %s", tabID)
 		}
-	}()
+
+		// Record PTY heartbeat for Layer 1
+		if amSystem.HealthMonitor != nil {
+			amSystem.HealthMonitor.RecordPTYHeartbeat()
+		}
+
+		// Initialize Vision Insights tracker
+		cwd, _ := os.Getwd()
+		sessionInfo := vision.SessionInfo{
+			TabID:      tabID,
+			WorkingDir: cwd,
+			ShellType:  shellConfig.ShellType,
+			InAutoMode: false,
+		}
+		insightsTracker := vision.NewInsightsTracker(amSystem.AMDir, sessionInfo)
+		visionParser.SetInsightsTracker(insightsTracker)
+		log.Printf("[Terminal] Vision insights tracker initialized for session %s", sessionID)
+
+		// Set up low-confidence callback for AM v2.0
+		// This callback sends to writeChan instead of writing directly
+		if llmLogger != nil {
+			llmLogger.SetLowConfidenceCallback(func(raw string) {
+				log.Printf("[AM] Low confidence parsing detected, queueing Vision notification")
+				overlayMsg := VisionOverlayMessage{
+					Type:        "VISION_OVERLAY",
+					OverlayType: "AM_LOW_CONFIDENCE",
+					Payload: map[string]interface{}{
+						"message":     "AM detected low-confidence parsing. Raw data preserved for manual review.",
+						"severity":    "warning",
+						"autoRespond": true,
+						"rawLength":   len(raw),
+					},
+				}
+				select {
+				case writeChan <- wsMessage{json: overlayMsg}:
+				case <-done:
+				}
+			})
+		}
+		log.Printf("[Terminal] Session %s: AM system initialized with tabID %s", sessionID, tabID)
+	}
 
 	detector := h.assistantCore.GetLLMDetector()
 	var inputBuffer strings.Builder
 	const flushTimeout = 2 * time.Second
-	lastFlushCheck := time.Now()
 
-	// Channel to coordinate shutdown with reason
-	type closeReason struct {
-		code   int
-		reason string
-	}
-	closeChan := make(chan closeReason, 1)
-	done := make(chan struct{})
-	var closeOnce sync.Once
+	// ═══ GOROUTINE 1: WebSocket Writer ═══
+	// Single goroutine that handles ALL WebSocket writes
+	// This eliminates race conditions entirely
+	go func() {
+		defer closeDone()
 
-	// Layer 1: PTY Heartbeat - Send periodic heartbeats for health monitoring
+		var writeCount int64
+		var slowWriteCount int64
+		lastStatsReport := time.Now()
+
+		for {
+			select {
+			case msg, ok := <-writeChan:
+				if !ok {
+					return // Channel closed
+				}
+
+				writeStart := time.Now()
+				var err error
+
+				if msg.json != nil {
+					// JSON message
+					err = conn.WriteJSON(msg.json)
+				} else {
+					// Binary message
+					err = conn.WriteMessage(msg.messageType, msg.data)
+				}
+
+				writeDuration := time.Since(writeStart)
+				writeCount++
+
+				// Freeze detection logging
+				if writeDuration > 100*time.Millisecond {
+					slowWriteCount++
+					log.Printf("[FREEZE-DETECT] Slow write: %v (total slow: %d)", writeDuration, slowWriteCount)
+				}
+				if writeDuration > 500*time.Millisecond {
+					log.Printf("[FREEZE-CRITICAL] Write blocked for %v!", writeDuration)
+				}
+
+				// Periodic stats
+				if time.Since(lastStatsReport) > 30*time.Second {
+					log.Printf("[WS-STATS] Writes: %d, SlowWrites: %d, QueueLen: %d",
+						writeCount, slowWriteCount, len(writeChan))
+					lastStatsReport = time.Now()
+				}
+
+				if err != nil {
+					log.Printf("[Terminal] WebSocket write error: %v", err)
+					return
+				}
+
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// ═══ GOROUTINE 2: Vision Worker ═══
+	// Processes Vision data and queues overlay messages
+	go func() {
+		for {
+			select {
+			case data, ok := <-visionChan:
+				if !ok {
+					return
+				}
+				if visionParser.Enabled() {
+					if match := visionParser.Feed(data); match != nil {
+						overlayMsg := VisionOverlayMessage{
+							Type:        "VISION_OVERLAY",
+							OverlayType: match.Type,
+							Payload:     match.Payload,
+						}
+						select {
+						case writeChan <- wsMessage{json: overlayMsg}:
+						case <-done:
+							return
+						}
+					}
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// ═══ GOROUTINE 3: AM Worker ═══
+	// Processes AM data with time-based snapshot backup
+	// This ensures TUI sessions are captured even if screen clear detection fails
+	go func() {
+		const snapshotInterval = 10 * time.Second // Time-based backup interval
+		lastSnapshot := time.Now()
+		activitySinceSnapshot := false
+
+		snapshotTicker := time.NewTicker(snapshotInterval)
+		defer snapshotTicker.Stop()
+
+		for {
+			select {
+			case data, ok := <-amChan:
+				if !ok {
+					return
+				}
+				llmLoggerMu.RLock()
+				logger := llmLogger
+				llmLoggerMu.RUnlock()
+
+				if logger != nil && logger.GetActiveConversationID() != "" {
+					logger.AddOutput(data)
+					activitySinceSnapshot = true
+				}
+
+			case <-snapshotTicker.C:
+				// Time-based snapshot backup for TUI sessions
+				// Only triggers if there's been activity since last snapshot
+				llmLoggerMu.RLock()
+				logger := llmLogger
+				llmLoggerMu.RUnlock()
+
+				if logger != nil && logger.IsTUICaptureMode() && activitySinceSnapshot {
+					// Rate limit: ensure minimum interval between snapshots
+					if time.Since(lastSnapshot) >= snapshotInterval {
+						log.Printf("[AM-Worker] Time-based snapshot trigger (activity since last: %v)", time.Since(lastSnapshot))
+						logger.TriggerPeriodicSnapshot()
+						lastSnapshot = time.Now()
+						activitySinceSnapshot = false
+					}
+				}
+
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// ═══ GOROUTINE 4: PTY Heartbeat ═══
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -231,24 +395,29 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// PTY -> WebSocket (read from terminal, send to browser)
+	// Channel to coordinate shutdown with reason
+	type closeReason struct {
+		code   int
+		reason string
+	}
+	closeChan := make(chan closeReason, 1)
+
+	// ═══ GOROUTINE 5: PTY Reader ═══
+	// Reads from PTY and queues data to appropriate channels
 	go func() {
-		defer closeOnce.Do(func() { close(done) })
+		defer closeDone()
 		buf := make([]byte, 4096)
-		var messageCount int64
-		var totalWriteTime time.Duration
-		var maxWriteTime time.Duration
-		lastStatsReport := time.Now()
-		
+
 		for {
-			// FREEZE INSTRUMENTATION: Time PTY reads
+			// Time PTY reads for freeze detection
 			readStart := time.Now()
 			n, err := session.Read(buf)
 			readDuration := time.Since(readStart)
+
 			if readDuration > 100*time.Millisecond {
 				log.Printf("[FREEZE-DEBUG] Slow PTY read: %v for %d bytes", readDuration, n)
 			}
-			
+
 			if err != nil {
 				log.Printf("[Terminal] PTY read error: %v", err)
 				select {
@@ -257,73 +426,43 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
+
 			if n > 0 {
-				messageCount++
-				// ═══ CRITICAL PERFORMANCE: Send to browser FIRST ═══
-				// This ensures terminal output is immediately visible
-				
-				// FREEZE INSTRUMENTATION: Time WebSocket writes
-				writeStart := time.Now()
-				err = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
-				writeDuration := time.Since(writeStart)
-				
-				// Track cumulative stats
-				totalWriteTime += writeDuration
-				if writeDuration > maxWriteTime {
-					maxWriteTime = writeDuration
-				}
-				
-				if writeDuration > 50*time.Millisecond {
-					log.Printf("[FREEZE-DEBUG] Slow WebSocket write: %v for %d bytes", writeDuration, n)
-				}
-				if writeDuration > 500*time.Millisecond {
-					log.Printf("[FREEZE-CRITICAL] WebSocket write blocked for %v - %d bytes", writeDuration, n)
-				}
-				
-				// Periodic stats report (every 30 seconds)
-				if time.Since(lastStatsReport) > 30*time.Second {
-					avgWrite := time.Duration(0)
-					if messageCount > 0 {
-						avgWrite = totalWriteTime / time.Duration(messageCount)
-					}
-					log.Printf("[FREEZE-STATS] Messages: %d, AvgWrite: %v, MaxWrite: %v", messageCount, avgWrite, maxWriteTime)
-					lastStatsReport = time.Now()
-				}
-				
-				if err != nil {
-					log.Printf("[Terminal] WebSocket write error: %v", err)
+				// CRITICAL: Copy the buffer before sending to channels
+				// The original buf is reused on the next Read() call
+				dataCopy := make([]byte, n)
+				copy(dataCopy, buf[:n])
+
+				// Queue terminal output to WebSocket (highest priority)
+				select {
+				case writeChan <- wsMessage{messageType: websocket.BinaryMessage, data: dataCopy}:
+				case <-done:
 					return
 				}
 
-				// Vision: Feed data to parser asynchronously (non-blocking)
-				if visionParser.Enabled() {
-					go func(data []byte) {
-						if match := visionParser.Feed(data); match != nil {
-							overlayMsg := VisionOverlayMessage{
-								Type:        "VISION_OVERLAY",
-								OverlayType: match.Type,
-								Payload:     match.Payload,
-							}
-							conn.WriteJSON(overlayMsg) // Best effort, ignore errors
-						}
-					}(buf[:n])
+				// Queue to Vision worker (non-blocking, drop if full)
+				select {
+				case visionChan <- dataCopy:
+				default:
+					// Vision queue full, skip this chunk (non-critical)
 				}
 
-				// Feed output to LLM logger asynchronously (non-blocking)
-				if llmLogger != nil {
-					go func(data string) {
-						if llmLogger.GetActiveConversationID() != "" {
-							llmLogger.AddOutput(data)
-						}
-					}(string(buf[:n]))
+				// Queue to AM worker (non-blocking, drop if full)
+				select {
+				case amChan <- string(dataCopy):
+				default:
+					// AM queue full, skip this chunk (non-critical)
 				}
 			}
 		}
 	}()
 
-	// WebSocket -> PTY (read from browser, send to terminal)
+	// ═══ GOROUTINE 6: WebSocket Reader ═══
+	// Reads from WebSocket and writes to PTY
+	lastFlushCheck := time.Now()
+
 	go func() {
-		defer closeOnce.Do(func() { close(done) })
+		defer closeDone()
 		for {
 			msgType, data, err := conn.ReadMessage()
 			if err != nil {
@@ -355,7 +494,6 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 						visionParser.Clear()
 						log.Printf("[Vision] Disabled for session %s", sessionID)
 					case "INJECT_COMMAND":
-						// Execute command in PTY (like git add <file>)
 						if visionMsg.Command != "" {
 							log.Printf("[Vision] Injecting command: %s", visionMsg.Command)
 							if _, err := session.Write([]byte(visionMsg.Command + "\r")); err != nil {
@@ -369,16 +507,18 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 				// Check for AM control messages (auto-respond state sync)
 				var amMsg AMControlMessage
 				if err := json.Unmarshal(data, &amMsg); err == nil && amMsg.Type == "AM_AUTO_RESPOND" {
-					if llmLogger != nil {
-						llmLogger.SetAutoRespond(amMsg.AutoRespond)
+					llmLoggerMu.RLock()
+					logger := llmLogger
+					llmLoggerMu.RUnlock()
+					if logger != nil {
+						logger.SetAutoRespond(amMsg.AutoRespond)
 						log.Printf("[AM] Auto-respond set to %v for session %s", amMsg.AutoRespond, sessionID)
 					}
 					continue
 				}
 			}
 
-			// ═══ CRITICAL PERFORMANCE: Write to PTY FIRST, process later ═══
-			// This ensures keyboard input is immediately responsive
+			// Write to PTY (this is the critical path for responsiveness)
 			if _, err := session.Write(data); err != nil {
 				log.Printf("[Terminal] PTY write error: %v", err)
 				select {
@@ -388,16 +528,19 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Accumulate input for LLM detection (after PTY write)
+			// Accumulate input for LLM detection
 			dataStr := string(data)
 			inputBuffer.WriteString(dataStr)
 
-			// AM: Capture user input when inside active LLM session (async, non-blocking)
-			if llmLogger != nil {
-				activeConv := llmLogger.GetActiveConversationID()
+			// AM: Capture user input when inside active LLM session
+			llmLoggerMu.RLock()
+			logger := llmLogger
+			llmLoggerMu.RUnlock()
+
+			if logger != nil {
+				activeConv := logger.GetActiveConversationID()
 				if activeConv != "" {
-					// Fire and forget - don't block on this
-					go llmLogger.AddUserInput(dataStr)
+					go logger.AddUserInput(dataStr)
 				}
 			}
 
@@ -406,34 +549,32 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 				commandLine := strings.TrimSpace(inputBuffer.String())
 				inputBuffer.Reset()
 
-				if commandLine != "" && llmLogger != nil {
-					// Only detect new LLM command if no conversation is active
-					activeConv := llmLogger.GetActiveConversationID()
+				if commandLine != "" && logger != nil {
+					activeConv := logger.GetActiveConversationID()
 					if activeConv == "" {
 						detected := detector.DetectCommand(commandLine)
 
 						if detected.Detected {
-							// Check if this is a TUI-based tool (Copilot, Claude)
 							isTUITool := detected.Provider == "github-copilot" || detected.Provider == "claude"
 
 							if isTUITool {
-								llmLogger.StartConversationFromProcess(
+								logger.StartConversationFromProcess(
 									string(detected.Provider),
 									string(detected.Type),
 									0,
 								)
 							} else {
-								llmLogger.StartConversation(detected)
+								logger.StartConversation(detected)
 							}
 						}
 					}
 				}
 			}
 
-			// Periodic flush check for LLM output (reduced frequency)
-			if llmLogger != nil && time.Since(lastFlushCheck) > flushTimeout {
-				if llmLogger.ShouldFlushOutput(flushTimeout) {
-					go llmLogger.FlushOutput() // Async flush
+			// Periodic flush check for LLM output
+			if logger != nil && time.Since(lastFlushCheck) > flushTimeout {
+				if logger.ShouldFlushOutput(flushTimeout) {
+					go logger.FlushOutput()
 				}
 				lastFlushCheck = time.Now()
 			}
@@ -458,14 +599,21 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		finalReason = closeReason{CloseCodeTimeout, "Session timed out after 24 hours"}
 	}
 
+	// Close channels to stop workers
+	close(writeChan)
+	close(visionChan)
+	close(amChan)
+
 	// CRITICAL: Clean up LLM logger when session ends
-	if llmLogger != nil {
-		// End any active conversation
-		if activeConv := llmLogger.GetActiveConversationID(); activeConv != "" {
+	llmLoggerMu.RLock()
+	logger := llmLogger
+	llmLoggerMu.RUnlock()
+
+	if logger != nil {
+		if activeConv := logger.GetActiveConversationID(); activeConv != "" {
 			log.Printf("[Terminal] Ending active conversation %s on session close", activeConv)
-			llmLogger.EndConversation()
+			logger.EndConversation()
 		}
-		// Remove the logger from global map to prevent memory leaks
 		am.RemoveLLMLogger(tabID)
 		log.Printf("[Terminal] LLM logger cleaned up for tab %s", tabID)
 	}
