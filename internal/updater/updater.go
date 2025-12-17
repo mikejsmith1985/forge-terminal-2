@@ -13,7 +13,7 @@ import (
 )
 
 // Version is set at build time via ldflags
-var Version = "1.24.0"
+var Version = "1.24.1"
 
 // GitHub repo info
 const (
