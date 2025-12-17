@@ -231,8 +231,10 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	detector := h.assistantCore.GetLLMDetector()
 	var inputBuffer strings.Builder
+	var llmOutputBuffer strings.Builder // Buffer for LLM logger to reduce lock contention
 	const flushTimeout = 2 * time.Second
 	lastFlushCheck := time.Now()
+	lastLLMFlush := time.Now()
 
 	// Channel to coordinate shutdown with reason
 	type closeReason struct {
@@ -337,12 +339,17 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// Feed output to LLM logger SYNCHRONOUSLY - no goroutine spawn
-				// The old "async" approach spawned thousands of goroutines that
-				// blocked on mutex, causing memory growth and eventual freeze
-				if llmLogger != nil {
-					if llmLogger.GetActiveConversationID() != "" {
-						llmLogger.AddOutput(string(buf[:n]))
+				// Feed output to LLM logger - THROTTLED to reduce CPU load
+				// Accumulate output and flush every 200ms to prevent lock contention
+				if llmLogger != nil && llmLogger.GetActiveConversationID() != "" {
+					llmOutputBuffer.Write(buf[:n])
+					now := time.Now()
+					if now.Sub(lastLLMFlush) > 200*time.Millisecond {
+						lastLLMFlush = now
+						if llmOutputBuffer.Len() > 0 {
+							llmLogger.AddOutput(llmOutputBuffer.String())
+							llmOutputBuffer.Reset()
+						}
 					}
 				}
 			}
