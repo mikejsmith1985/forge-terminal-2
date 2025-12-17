@@ -324,27 +324,26 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-				// Vision: Feed data to parser asynchronously (non-blocking)
+				// Vision: Feed data SYNCHRONOUSLY - no goroutine spawn
+				// Spawning goroutines per chunk caused unbounded growth and freezes
 				if visionParser.Enabled() {
-					go func(data []byte) {
-						if match := visionParser.Feed(data); match != nil {
-							overlayMsg := VisionOverlayMessage{
-								Type:        "VISION_OVERLAY",
-								OverlayType: match.Type,
-								Payload:     match.Payload,
-							}
-							conn.WriteJSON(overlayMsg) // Best effort, ignore errors
+					if match := visionParser.Feed(buf[:n]); match != nil {
+						overlayMsg := VisionOverlayMessage{
+							Type:        "VISION_OVERLAY",
+							OverlayType: match.Type,
+							Payload:     match.Payload,
 						}
-					}(buf[:n])
+						conn.WriteJSON(overlayMsg) // Best effort, ignore errors
+					}
 				}
 
-				// Feed output to LLM logger asynchronously (non-blocking)
+				// Feed output to LLM logger SYNCHRONOUSLY - no goroutine spawn
+				// The old "async" approach spawned thousands of goroutines that
+				// blocked on mutex, causing memory growth and eventual freeze
 				if llmLogger != nil {
-					go func(data string) {
-						if llmLogger.GetActiveConversationID() != "" {
-							llmLogger.AddOutput(data)
-						}
-					}(string(buf[:n]))
+					if llmLogger.GetActiveConversationID() != "" {
+						llmLogger.AddOutput(string(buf[:n]))
+					}
 				}
 			}
 		}
