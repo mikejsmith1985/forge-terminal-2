@@ -379,9 +379,6 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
   const amLogQueueRef = useRef([]);
   const amLogFlushIdleRef = useRef(null);
   const amInputBufferRef = useRef('');
-
-  // PERF: Write batching - accumulate data and write once per animation frame
-  const writeBufferRef = useRef({ data: [], rafId: null });
   const amInputTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef(null);
@@ -923,15 +920,14 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
       // =========================================================================
 
       ws.onmessage = (event) => {
-        const start = performance.now();
-        // CRITICAL: Keep hot path minimal - batch writes for performance
+        // CRITICAL: Keep hot path minimal - just write to terminal
         let textData = '';
-        let writeData = null;
 
         if (event.data instanceof ArrayBuffer) {
-          // Binary data from PTY
-          writeData = new Uint8Array(event.data);
-          textData = new TextDecoder().decode(writeData);
+          // Binary data from PTY - write immediately
+          const data = new Uint8Array(event.data);
+          term.write(data);
+          textData = new TextDecoder().decode(data);
         } else if (typeof event.data === 'string') {
           const str = event.data;
           // PERF FIX: Check for JSON marker BEFORE parsing to avoid exception spam
@@ -947,37 +943,17 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
               }
             } catch (e) {
               // Malformed JSON starting with { - just write it
-              writeData = str;
+              term.write(str);
               textData = str;
             }
           } else {
-            // Regular text
-            writeData = str;
+            // Regular text - write immediately
+            term.write(str);
             textData = str;
           }
         } else {
-          writeData = event.data;
+          term.write(event.data);
           textData = String(event.data);
-        }
-
-        // PERF FIX: Batch writes - accumulate and write once per animation frame
-        // This prevents UI freeze when receiving hundreds of messages per second
-        if (writeData !== null) {
-          const wb = writeBufferRef.current;
-          wb.data.push(writeData);
-
-          // Schedule write on next animation frame if not already scheduled
-          if (!wb.rafId) {
-            wb.rafId = requestAnimationFrame(() => {
-              wb.rafId = null;
-              const chunks = wb.data;
-              wb.data = [];
-              // Batch all accumulated chunks into single write
-              for (const chunk of chunks) {
-                term.write(chunk);
-              }
-            });
-          }
         }
 
         // PERF FIX: Append to buffer efficiently (reuse buffer object)
@@ -1015,19 +991,22 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
           }
         }
 
-        // PERF FIX: Throttle expensive prompt detection - only run every 500ms
-        const now = Date.now();
-        if (now - lastPromptCheckRef.current < promptCheckIntervalMs) {
-          return; // Skip expensive work if we checked recently
-        }
-        lastPromptCheckRef.current = now;
-
         // PERF FIX: Schedule expensive work during idle time
+        // We use a trailing debounce pattern here:
+        // 1. If a check is already scheduled, cancel it (new data arrived)
+        // 2. Schedule a new check
+        // This ensures we only check when the stream pauses, but we NEVER miss the final prompt
         if (waitingCheckIdleRef.current) {
           cancelIdleWork(waitingCheckIdleRef.current);
         }
+        
         waitingCheckIdleRef.current = scheduleIdleWork(() => {
           waitingCheckIdleRef.current = null;
+          
+          // We removed the time-based throttle here because the debounce (cancelIdleWork)
+          // already prevents excessive checks during rapid output.
+          // If we are here, the stream has paused (idle), so we MUST check for a prompt.
+          lastPromptCheckRef.current = Date.now();
 
           // Update lastOutputRef for compatibility
           lastOutputRef.current = buf.data;
@@ -1067,11 +1046,6 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
             }
           }
         });
-
-        const elapsed = performance.now() - start;
-        if (elapsed > 16) {
-             console.warn(`[Forge] Slow message processing: ${elapsed.toFixed(2)}ms`);
-        }
       };
 
       ws.onerror = (error) => {
