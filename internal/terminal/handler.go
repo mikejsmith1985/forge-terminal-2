@@ -427,13 +427,11 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			dataStr := string(data)
 			inputBuffer.WriteString(dataStr)
 
-			// AM: Capture user input when inside active LLM session (async, non-blocking)
-			if llmLogger != nil {
-				activeConv := llmLogger.GetActiveConversationID()
-				if activeConv != "" {
-					// Fire and forget - don't block on this
-					go llmLogger.AddUserInput(dataStr)
-				}
+			// AM: Capture user input when inside active LLM session
+			// NOTE: Do NOT spawn goroutine per keystroke - causes unbounded growth
+			// Instead, accumulate input and let AddUserInput handle batching internally
+			if llmLogger != nil && llmLogger.GetActiveConversationID() != "" {
+				llmLogger.AddUserInput(dataStr)
 			}
 
 			// Check for newline/enter (command submission)
