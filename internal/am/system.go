@@ -69,6 +69,9 @@ func (s *System) IsEnabled() bool {
 
 // GetLLMLogger returns an LLM logger for a specific tab.
 func (s *System) GetLLMLogger(tabID string) *LLMLogger {
+	if !s.enabled {
+		return nil
+	}
 	return GetLLMLogger(tabID, s.AMDir)
 }
 

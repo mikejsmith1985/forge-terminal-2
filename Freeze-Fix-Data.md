@@ -160,6 +160,7 @@ When CPU is high, there's no mechanism to:
 ### Immediate (Can Do Now)
 
 1. **Batch Keystroke AM Processing**
+   - **Status:** IMPLEMENTED (v1.24.7)
    ```go
    // Instead of per-keystroke AM check, batch to 100ms intervals
    inputAccumulator += dataStr
@@ -173,6 +174,7 @@ When CPU is high, there's no mechanism to:
    ```
 
 2. **True AM Disable Flag**
+   - **Status:** IMPLEMENTED (v1.24.7)
    Add a flag that completely skips AM initialization when disabled:
    ```go
    if amEnabled && amSystem != nil {
@@ -182,6 +184,7 @@ When CPU is high, there's no mechanism to:
    ```
 
 3. **Add Instrumentation**
+   - **Status:** IMPLEMENTED (v1.24.7)
    Before more fixes, measure actual bottlenecks:
    ```javascript
    // In onmessage handler
@@ -287,6 +290,34 @@ VS Code solved this years ago with WebWorkers. Forge needs the same architectura
 2. Implement keystroke batching for AM (100ms intervals)
 3. Test with instrumentation to verify improvement
 4. If insufficient, begin WebWorker implementation
+
+---
+
+## Implementation Plan (v1.24.7)
+
+### 1. Backend: Batch Keystroke AM Processing
+- **File:** `internal/terminal/handler.go`
+- **Action:** Implement a 100ms buffer for AM checks.
+- **Details:**
+    - Introduce `amInputAccumulator` (string builder or string).
+    - Introduce `lastAMCheck` (time.Time).
+    - In the read loop, append to accumulator.
+    - Only call `llmLogger.GetActiveConversationID()` and `llmLogger.AddUserInput()` if `time.Since(lastAMCheck) > 100ms`.
+    - Reset accumulator and timer after check.
+
+### 2. Backend: True AM Disable Flag
+- **File:** `internal/am/system.go`
+- **Action:** Ensure `GetLLMLogger` respects the enabled state.
+- **Details:**
+    - Modify `GetLLMLogger` to return `nil` if `!s.enabled`.
+    - This will cause the `llmLogger != nil` check in `handler.go` to fail fast, skipping all AM logic.
+
+### 3. Frontend: Instrumentation
+- **File:** `frontend/src/components/ForgeTerminal.jsx`
+- **Action:** Add performance timing to the WebSocket message handler.
+- **Details:**
+    - Measure time taken to process message.
+    - Log warning if processing takes > 16ms (frame budget).
 
 ---
 

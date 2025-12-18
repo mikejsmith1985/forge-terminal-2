@@ -923,6 +923,7 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
       // =========================================================================
 
       ws.onmessage = (event) => {
+        const start = performance.now();
         // CRITICAL: Keep hot path minimal - batch writes for performance
         let textData = '';
         let writeData = null;
@@ -1066,6 +1067,11 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
             }
           }
         });
+
+        const elapsed = performance.now() - start;
+        if (elapsed > 16) {
+             console.warn(`[Forge] Slow message processing: ${elapsed.toFixed(2)}ms`);
+        }
       };
 
       ws.onerror = (error) => {

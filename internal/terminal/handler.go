@@ -231,6 +231,8 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	detector := h.assistantCore.GetLLMDetector()
 	var inputBuffer strings.Builder
+	var amInputAccumulator strings.Builder // Batch AM input checks
+	lastAMCheck := time.Now()
 	var llmOutputBuffer strings.Builder // Buffer for LLM logger to reduce lock contention
 	const flushTimeout = 2 * time.Second
 	lastFlushCheck := time.Now()
@@ -428,10 +430,14 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			inputBuffer.WriteString(dataStr)
 
 			// AM: Capture user input when inside active LLM session
-			// NOTE: Do NOT spawn goroutine per keystroke - causes unbounded growth
-			// Instead, accumulate input and let AddUserInput handle batching internally
-			if llmLogger != nil && llmLogger.GetActiveConversationID() != "" {
-				llmLogger.AddUserInput(dataStr)
+			// Batch checks to avoid main thread contention (100ms intervals)
+			amInputAccumulator.WriteString(dataStr)
+			if time.Since(lastAMCheck) > 100*time.Millisecond {
+				if llmLogger != nil && llmLogger.GetActiveConversationID() != "" {
+					llmLogger.AddUserInput(amInputAccumulator.String())
+				}
+				amInputAccumulator.Reset()
+				lastAMCheck = time.Now()
 			}
 
 			// Check for newline/enter (command submission)

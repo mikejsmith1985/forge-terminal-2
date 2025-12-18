@@ -138,7 +138,7 @@ const FeedbackModal = ({ isOpen, onClose }) => {
         const filename = `feedback-${timestamp}.png`;
         const content = base64Image.split(',')[1];
 
-        const res = await fetch(`https://api.github.com/repos/mikejsmith1985/forge-terminal/contents/feedback-screenshots/${filename}`, {
+        const res = await fetch(`https://api.github.com/repos/mikejsmith1985/forge-terminal-2/contents/feedback-screenshots/${filename}`, {
             method: 'PUT',
             headers: {
                 'Authorization': `token ${githubToken}`,
@@ -179,7 +179,7 @@ const FeedbackModal = ({ isOpen, onClose }) => {
             body += `<details>\n<summary>Application Logs</summary>\n\n\`\`\`\n${logs}\n\`\`\`\n</details>`;
         }
 
-        const res = await fetch(`https://api.github.com/repos/mikejsmith1985/forge-terminal/issues`, {
+        const res = await fetch(`https://api.github.com/repos/mikejsmith1985/forge-terminal-2/issues`, {
             method: 'POST',
             headers: {
                 'Authorization': `token ${githubToken}`,

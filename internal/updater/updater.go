@@ -13,12 +13,12 @@ import (
 )
 
 // Version is set at build time via ldflags
-var Version = "1.24.4"
+var Version = "1.24.7"
 
 // GitHub repo info
 const (
 	repoOwner = "mikejsmith1985"
-	repoName  = "forge-terminal"
+	repoName  = "forge-terminal-2"
 )
 
 // Release represents a GitHub release
