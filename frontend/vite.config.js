@@ -6,7 +6,15 @@ export default defineConfig({
   base: '/',
   build: {
     outDir: '../cmd/forge/web',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Ensure assets go to lowercase 'assets/' directory for Go embed case-sensitivity
+        assetFileNames: 'assets/[name].[hash][extname]',
+        entryFileNames: 'assets/[name].[hash].js',
+        chunkFileNames: 'assets/[name].[hash].js'
+      }
+    }
   },
   server: {
     host: '0.0.0.0',

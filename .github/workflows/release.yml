@@ -56,6 +56,23 @@ jobs:
           npm install
           npm run build
 
+      - name: Normalize asset directory case
+        run: |
+          # Ensure Assets directory is lowercase (case-sensitive for Go embed)
+          cd cmd/forge/web
+          if [ -d "Assets" ]; then
+            mv Assets assets 2>/dev/null || true
+          fi
+          # Verify assets directory exists and contains files
+          if [ ! -d "assets" ]; then
+            echo "ERROR: assets directory not found after build!"
+            ls -la
+            exit 1
+          fi
+          # List what we're embedding
+          echo "Embedding assets:"
+          find . -type f -name "*.js" -o -name "*.css" | head -10
+
       - name: Build Linux and Windows Binaries
         if: matrix.os == 'ubuntu-latest'
         env:
