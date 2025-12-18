@@ -1,0 +1,43 @@
+{
+  "$schema": "Schema for project-specific system card configuration",
+  "projectName": "My Node.js Project",
+  "gitStatus": {
+    "enabled": true,
+    "command": "git status --short",
+    "description": "Quick check of git repository status"
+  },
+  "buildProject": {
+    "enabled": true,
+    "command": "npm run build",
+    "description": "Build the Node.js project",
+    "preCommands": ["npm install"],
+    "postCommands": []
+  },
+  "releaseManager": {
+    "enabled": true,
+    "releaseStrategy": "semver",
+    "releaseBranch": "main",
+    "createTags": true,
+    "createGitHubRelease": true,
+    "runTests": true,
+    "testCommand": "npm test"
+  },
+  "customSystemCards": [
+    {
+      "id": "npm-start",
+      "name": "Start Dev Server",
+      "description": "Start the development server on port 3000",
+      "command": "npm run dev",
+      "colorTheme": "green",
+      "category": "system"
+    },
+    {
+      "id": "npm-lint",
+      "name": "Lint Code",
+      "description": "Run ESLint on the project",
+      "command": "npm run lint -- --fix",
+      "colorTheme": "blue",
+      "category": "system"
+    }
+  ]
+}

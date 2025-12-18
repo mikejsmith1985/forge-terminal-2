@@ -18,6 +18,8 @@ export const DEFAULT_COMMAND_CARDS = [
     colorTheme: 'orange',
     favorite: false,
     triggerAM: true,
+    configurable: true,
+    projectConfigKey: 'releaseManager',
     // This card doesn't have a command property - it's handled specially
   },
   {
@@ -31,6 +33,13 @@ export const DEFAULT_COMMAND_CARDS = [
     colorTheme: 'blue',
     favorite: true,
     pasteOnly: false,
+    configurable: true,
+    projectConfigKey: 'gitStatus',
+    defaultCommands: [
+      'git status',
+      'git status --short',
+      'git log --oneline -5',
+    ],
   },
   {
     id: 'system-build',
@@ -43,6 +52,14 @@ export const DEFAULT_COMMAND_CARDS = [
     colorTheme: 'purple',
     favorite: true,
     pasteOnly: false,
+    configurable: true,
+    projectConfigKey: 'buildProject',
+    defaultCommands: [
+      'make build',
+      'npm run build',
+      'yarn build',
+      'make build && make test',
+    ],
   },
 ];
 

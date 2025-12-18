@@ -1,0 +1,43 @@
+{
+  "$schema": "Schema for project-specific system card configuration",
+  "projectName": "My Go Service",
+  "gitStatus": {
+    "enabled": true,
+    "command": "git status --short",
+    "description": "Quick check of git repository status"
+  },
+  "buildProject": {
+    "enabled": true,
+    "command": "go build -o ./bin/app",
+    "description": "Build the Go binary",
+    "preCommands": ["go mod tidy"],
+    "postCommands": ["./bin/app --version"]
+  },
+  "releaseManager": {
+    "enabled": true,
+    "releaseStrategy": "semver",
+    "releaseBranch": "main",
+    "createTags": true,
+    "createGitHubRelease": true,
+    "runTests": true,
+    "testCommand": "go test -v -race ./..."
+  },
+  "customSystemCards": [
+    {
+      "id": "go-test",
+      "name": "Run Tests",
+      "description": "Run Go tests with coverage",
+      "command": "go test -v -cover ./...",
+      "colorTheme": "blue",
+      "category": "system"
+    },
+    {
+      "id": "go-fmt",
+      "name": "Format Code",
+      "description": "Format all Go files",
+      "command": "go fmt ./...",
+      "colorTheme": "purple",
+      "category": "system"
+    }
+  ]
+}

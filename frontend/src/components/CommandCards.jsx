@@ -2,6 +2,7 @@ import React from 'react';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableCommandCard } from './SortableCommandCard';
 import ReleaseManagerCard from './ReleaseManagerCard';
+import SystemCommandCard from './SystemCommandCard';
 import { RefreshCw } from 'lucide-react';
 import { isReleaseManagerCard, isSystemCard } from '../utils/defaultCommandCards';
 
@@ -66,8 +67,16 @@ const CommandCards = ({ commands, loading, error, onExecute, onPaste, onEdit, on
                 />
               );
             }
-            // Other system cards can be added here
-            return null;
+            // Render other system cards using SystemCommandCard
+            return (
+              <SystemCommandCard
+                key={cmd.id}
+                card={cmd}
+                onExecuteCommand={onExecute}
+                onToast={onToast}
+                onConfigureCard={onEdit}
+              />
+            );
           })}
         </div>
       )}

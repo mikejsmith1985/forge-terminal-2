@@ -1,0 +1,177 @@
+.system-command-card {
+  border: 1px solid rgba(100, 100, 100, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, rgba(20, 20, 20, 0.8) 0%, rgba(30, 30, 30, 0.6) 100%);
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.system-command-card:hover {
+  border-color: rgba(100, 100, 100, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  transform: translateY(-2px);
+}
+
+.system-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.system-card-title-section {
+  flex: 1;
+}
+
+.system-card-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e0e0e0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-card-description {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: #a0a0a0;
+}
+
+.system-card-config-btn {
+  background: rgba(100, 150, 255, 0.1);
+  border: 1px solid rgba(100, 150, 255, 0.3);
+  color: #6495ff;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  margin-left: 8px;
+}
+
+.system-card-config-btn:hover {
+  background: rgba(100, 150, 255, 0.2);
+  border-color: rgba(100, 150, 255, 0.5);
+}
+
+.system-card-command-display {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(100, 100, 100, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  overflow: auto;
+  max-height: 100px;
+}
+
+.system-card-command-text {
+  margin: 0;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  color: #a0d955;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.system-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.system-card-action {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(100, 100, 100, 0.2);
+  background: rgba(50, 50, 50, 0.6);
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.system-card-action:hover {
+  background: rgba(80, 80, 80, 0.8);
+  border-color: rgba(100, 100, 100, 0.4);
+}
+
+.system-card-action.copy-btn {
+  border-color: rgba(100, 150, 255, 0.2);
+  background: rgba(100, 150, 255, 0.1);
+  color: #6495ff;
+}
+
+.system-card-action.copy-btn:hover {
+  background: rgba(100, 150, 255, 0.2);
+  border-color: rgba(100, 150, 255, 0.4);
+}
+
+.system-card-action.execute-btn {
+  border-color: rgba(160, 217, 85, 0.2);
+  background: rgba(160, 217, 85, 0.1);
+  color: #a0d955;
+}
+
+.system-card-action.execute-btn:hover {
+  background: rgba(160, 217, 85, 0.2);
+  border-color: rgba(160, 217, 85, 0.4);
+}
+
+/* Color theme variants */
+.system-card-blue {
+  border-left: 4px solid #6495ff;
+}
+
+.system-card-blue .system-card-title::before {
+  content: '📊';
+  font-size: 16px;
+}
+
+.system-card-purple {
+  border-left: 4px solid #bb86fc;
+}
+
+.system-card-purple .system-card-title::before {
+  content: '🔨';
+  font-size: 16px;
+}
+
+.system-card-orange {
+  border-left: 4px solid #ff9800;
+}
+
+.system-card-orange .system-card-title::before {
+  content: '🚀';
+  font-size: 16px;
+}
+
+.system-card-green {
+  border-left: 4px solid #a0d955;
+}
+
+.system-card-green .system-card-title::before {
+  content: '✅';
+  font-size: 16px;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .system-card-actions {
+    flex-direction: column;
+  }
+
+  .system-card-action {
+    width: 100%;
+  }
+}

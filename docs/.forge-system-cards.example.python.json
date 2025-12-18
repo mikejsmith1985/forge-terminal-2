@@ -1,0 +1,43 @@
+{
+  "$schema": "Schema for project-specific system card configuration",
+  "projectName": "My Python Project",
+  "gitStatus": {
+    "enabled": true,
+    "command": "git status --short",
+    "description": "Quick check of git repository status"
+  },
+  "buildProject": {
+    "enabled": true,
+    "command": "python -m build",
+    "description": "Build Python package",
+    "preCommands": ["pip install --upgrade build"],
+    "postCommands": []
+  },
+  "releaseManager": {
+    "enabled": true,
+    "releaseStrategy": "semver",
+    "releaseBranch": "main",
+    "createTags": true,
+    "createGitHubRelease": true,
+    "runTests": true,
+    "testCommand": "pytest -v --cov"
+  },
+  "customSystemCards": [
+    {
+      "id": "python-lint",
+      "name": "Lint Code",
+      "description": "Run pylint and black checks",
+      "command": "pylint src/ && black --check src/",
+      "colorTheme": "blue",
+      "category": "system"
+    },
+    {
+      "id": "python-format",
+      "name": "Format Code",
+      "description": "Format with Black",
+      "command": "black src/",
+      "colorTheme": "purple",
+      "category": "system"
+    }
+  ]
+}
