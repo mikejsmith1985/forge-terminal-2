@@ -18,7 +18,7 @@ var Version = "1.24.7"
 // GitHub repo info
 const (
 	repoOwner = "mikejsmith1985"
-	repoName  = "forge-terminal-2"
+	repoName  = "forge-terminal"
 )
 
 // Release represents a GitHub release
