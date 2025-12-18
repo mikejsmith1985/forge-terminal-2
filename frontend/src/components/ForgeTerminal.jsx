@@ -379,6 +379,9 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
   const amLogQueueRef = useRef([]);
   const amLogFlushIdleRef = useRef(null);
   const amInputBufferRef = useRef('');
+
+  // PERF: Write batching - accumulate data and write once per animation frame
+  const writeBufferRef = useRef({ data: [], rafId: null });
   const amInputTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef(null);
@@ -920,14 +923,14 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
       // =========================================================================
 
       ws.onmessage = (event) => {
-        // CRITICAL: Keep hot path minimal - just write to terminal
+        // CRITICAL: Keep hot path minimal - batch writes for performance
         let textData = '';
+        let writeData = null;
 
         if (event.data instanceof ArrayBuffer) {
-          // Binary data from PTY - write immediately
-          const data = new Uint8Array(event.data);
-          term.write(data);
-          textData = new TextDecoder().decode(data);
+          // Binary data from PTY
+          writeData = new Uint8Array(event.data);
+          textData = new TextDecoder().decode(writeData);
         } else if (typeof event.data === 'string') {
           const str = event.data;
           // PERF FIX: Check for JSON marker BEFORE parsing to avoid exception spam
@@ -943,17 +946,37 @@ const ForgeTerminal = forwardRef(function ForgeTerminal({
               }
             } catch (e) {
               // Malformed JSON starting with { - just write it
-              term.write(str);
+              writeData = str;
               textData = str;
             }
           } else {
-            // Regular text - write immediately
-            term.write(str);
+            // Regular text
+            writeData = str;
             textData = str;
           }
         } else {
-          term.write(event.data);
+          writeData = event.data;
           textData = String(event.data);
+        }
+
+        // PERF FIX: Batch writes - accumulate and write once per animation frame
+        // This prevents UI freeze when receiving hundreds of messages per second
+        if (writeData !== null) {
+          const wb = writeBufferRef.current;
+          wb.data.push(writeData);
+
+          // Schedule write on next animation frame if not already scheduled
+          if (!wb.rafId) {
+            wb.rafId = requestAnimationFrame(() => {
+              wb.rafId = null;
+              const chunks = wb.data;
+              wb.data = [];
+              // Batch all accumulated chunks into single write
+              for (const chunk of chunks) {
+                term.write(chunk);
+              }
+            });
+          }
         }
 
         // PERF FIX: Append to buffer efficiently (reuse buffer object)
