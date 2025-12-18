@@ -76,7 +76,7 @@ type LLMConversation struct {
 
 // LLMLogger manages LLM conversation logging for a tab.
 type LLMLogger struct {
-	mu                sync.Mutex
+	mu                sync.RWMutex // RWMutex for better read performance (GetActiveConversationID called per keystroke)
 	tabID             string
 	conversations     map[string]*LLMConversation
 	activeConvID      string
@@ -1034,8 +1034,8 @@ func (l *LLMLogger) ShouldFlushOutput(threshold time.Duration) bool {
 
 // GetActiveConversationID returns the current active conversation ID.
 func (l *LLMLogger) GetActiveConversationID() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return l.activeConvID
 }
 
