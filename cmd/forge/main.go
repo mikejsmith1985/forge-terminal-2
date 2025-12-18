@@ -40,6 +40,33 @@ var preferredPorts = []int{8333, 8080, 9000, 3000, 3333}
 // Global assistant service (initialized in main)
 var assistantService assistant.Service
 
+// headerFixingResponseWriter wraps http.ResponseWriter to fix MIME types for embedded assets
+type headerFixingResponseWriter struct {
+	http.ResponseWriter
+	path      string
+	headerSet bool
+}
+
+func (w *headerFixingResponseWriter) WriteHeader(statusCode int) {
+	if !w.headerSet {
+		w.headerSet = true
+		// Fix MIME types based on file extension
+		contentType := w.ResponseWriter.Header().Get("Content-Type")
+		if contentType == "text/plain; charset=utf-8" || contentType == "" {
+			if strings.HasSuffix(w.path, ".css") {
+				w.ResponseWriter.Header().Set("Content-Type", "text/css; charset=utf-8")
+			} else if strings.HasSuffix(w.path, ".js") {
+				w.ResponseWriter.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			} else if strings.HasSuffix(w.path, ".svg") {
+				w.ResponseWriter.Header().Set("Content-Type", "image/svg+xml")
+			} else if strings.HasSuffix(w.path, ".mp4") {
+				w.ResponseWriter.Header().Set("Content-Type", "video/mp4")
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
 func main() {
 	// Set up file-based logging for production diagnostics
 	logFile, err := os.OpenFile(filepath.Join(os.Getenv("HOME"), ".forge", "forge.log"),
@@ -70,7 +97,7 @@ func main() {
 		log.Fatal("Failed to load embedded web files:", err)
 	}
 
-	// Wrap file server with cache-control headers
+	// Wrap file server with cache-control headers and explicit MIME types
 	fileServer := http.FileServer(http.FS(webFS))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Serve index.html with version-busted asset URLs
@@ -79,11 +106,17 @@ func main() {
 			return
 		}
 
+		// Wrap ResponseWriter to fix MIME types and cache headers
+		wrapped := &headerFixingResponseWriter{
+			ResponseWriter: w,
+			path:           r.URL.Path,
+		}
+
 		// Prevent caching to avoid stale WebSocket connection issues
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
-		fileServer.ServeHTTP(w, r)
+		wrapped.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		wrapped.Header().Set("Pragma", "no-cache")
+		wrapped.Header().Set("Expires", "0")
+		fileServer.ServeHTTP(wrapped, r)
 	})
 
 	// WebSocket terminal handler
